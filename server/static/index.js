@@ -1,35 +1,44 @@
-function appendHistory(type, query, uuid, plugin) {
+var md = window.markdownit({
+    html: true,
+    linkify: true,
+    typographer: true,
+    highlight: function (str, lang) {
+      if (lang && hljs.getLanguage(lang)) {
+        try {
+          return '<pre class="hljs"><code>' +
+                 hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
+                 '</code></pre>';
+        } catch (__) {}
+      }
+  
+      return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';  
+    }
+  });
+
+function appendHistory(type, message, uuid, plugin) {
     if (!uuid) return;
     if (type == 0) {
         // 用户消息
         $('.history').append(`
               <div class="right">
                  <div class="bubble bubble-green">
-                   <div class="bubble-avatar"><i class="fas fa-user"></i></div>
-                   <p style="text-align: left" id="${uuid}">${query}</p>
+                   <div class="bubble-text" id="${uuid}">${message}</div>
                  </div>
               </div>
 `);
     } else {
-        queries = query.split('\n');
+        messages = message.split('\n');
         $('.history').append(`
           <div class="left">
              <div class="bubble bubble-white">
-               <div class="bubble-avatar"><image src="./static/robot.png" width=32px attr="robot" /></div>
-               <div style="text-align: left" id="${uuid}">
+               <div class="bubble-text" id="${uuid}"></div>
              </div>
            </div>
         `);
-        for (i in queries) {
-            console.log(`#${uuid}`);
-            let line = queries[i].replaceAll(' ', '&nbsp;')
-            $(`#${uuid}`).append(`
-                <p>${line}</p>
-            `);
-        }
+        $(`#${uuid}`).append(md.render(`${message}`));
         if (plugin) {
             $(`#${uuid}`).after(`
-               <span class="badge badge-info plugin">${plugin}</span>             
+               <span class="badge badge-info plugin">${plugin}</span>
             `);
         }
     }
@@ -86,10 +95,51 @@ function guid() {
     return (S4()+S4()+"-"+S4()+"-"+S4()+"-"+S4()+"-"+S4()+S4()+S4());
 }
 
+// 创建WebSocket连接
+var socket = new WebSocket("ws://" + location.host + "/websocket");
+
+// 监听WebSocket打开事件
+socket.onopen = function (e) {
+    console.log("WebSocket连接已打开");
+};
+
+// 监听WebSocket关闭事件
+socket.onclose = function (e) {
+    console.log("WebSocket连接已关闭");
+};
+
+var rawData = {}
+
+var showMessage = function(data) {
+    var existing = $("#" + data.uuid);
+    if (existing.length > 0) {
+        // 如果存在，追加内容，并重新用 markdown 渲染
+        if (rawData[data.uuid] == undefined) {
+            rawData[data.uuid] = data['text'];
+        } else {
+            rawData[data.uuid] += data['text'];
+        }
+        $(`#${data.uuid}`)[0].innerHTML = md.render(rawData[data.uuid]);
+    } else {
+        rawData[data.uuid] = data['text'];
+        appendHistory(data['type'], data['text'], data['uuid'], data['plugin']);
+    }
+}
+
+// 监听WebSocket消息事件
+socket.onmessage = function (e) {
+    var data = JSON.parse(e.data);
+    if (data.action === "new_message") {
+        // console.log("收到新消息: ", data);
+        showMessage(data)
+        let scrollHeight = $('.history').prop("scrollHeight");
+        $('.history').scrollTop(scrollHeight, 200);
+    }
+};
+
 $(document).ready(function() {
     if (!window.console) window.console = {};
     if (!window.console.log) window.console.log = function() {};
-
     $('.CHAT').on('click', function(e) {
         e.preventDefault();
         var disabled = $('#query');
@@ -108,17 +158,18 @@ $(document).ready(function() {
             type: "POST",
             data: $.param(args),
             success: function(res) {
+                disabled.enable();
+                if (!res) return;
                 var data = JSON.parse(res);
                 if (data.code == 0) {
                     toastr.success('指令发送成功');
                 } else {
                     toastr.error(data.message, '指令发送失败');
                 }
-                disabled.enable();
             },
             error: function() {
-                toastr.error('服务器异常', '指令发送失败');
                 disabled.enable();
+                toastr.error('服务器异常', '指令发送失败');
             }
         });
     });
@@ -166,6 +217,7 @@ var updater = {
     },
 
     onSuccess: function(response) {
+        console.log("updater poll success")
         try {
             var res = JSON.parse(response);            
             updater.newMessages(res);

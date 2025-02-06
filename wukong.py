@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 class Wukong(object):
 
     _profiling = False
+    _debug = False
 
     def init(self):
         self.detector = None
@@ -35,6 +36,7 @@ class Wukong(object):
 ********************************************************
 *          wukong-robot - 中文语音对话机器人           *
 *          (c) 2019 潘伟洲 <m@hahack.com>              *
+*               当前版本号:  {}                      *
 *     https://github.com/wzpan/wukong-robot.git        *
 ********************************************************
 
@@ -42,15 +44,16 @@ class Wukong(object):
             如需退出，可以按 Ctrl-4 组合键
 
 """.format(
+                utils.get_file_content(
+                    os.path.join(constants.APP_PATH, "VERSION"), "r"
+                ).strip(),
                 config.get("/server/host", "0.0.0.0"),
                 config.get("/server/port", "5001"),
             )
         )
 
         self.conversation = Conversation(self._profiling)
-        self.conversation.say(
-            "{} 你好！试试对我喊唤醒词叫醒我吧".format(config.get("first_name", "主人")), True
-        )
+        self.conversation.say(f"{config.get('first_name', '主人')} 你好！试试对我喊唤醒词叫醒我吧", True)
         self.lifeCycleHandler = LifeCycleHandler(self.conversation)
         self.lifeCycleHandler.onInit()
 
@@ -74,9 +77,9 @@ class Wukong(object):
         if is_snowboy:
             self.conversation.interrupt()
             utils.setRecordable(False)
-        self.lifeCycleHandler.onWakeup(
-            onCompleted=_start_record if is_snowboy else None
-        )
+        self.lifeCycleHandler.onWakeup()
+        if is_snowboy:
+            _start_record()
 
     def _interrupt_callback(self):
         return self._interrupted
@@ -86,12 +89,12 @@ class Wukong(object):
         # capture SIGINT signal, e.g., Ctrl+C
         signal.signal(signal.SIGINT, self._signal_handler)
         # 后台管理端
-        server.run(self.conversation, self)
+        server.run(self.conversation, self, debug=self._debug)
         try:
             # 初始化离线唤醒
             detector.initDetector(self)
         except AttributeError:
-            logger.error("初始化离线唤醒功能失败")
+            logger.error("初始化离线唤醒功能失败", stack_info=True)
             pass
 
     def help(self):
@@ -148,7 +151,7 @@ class Wukong(object):
                 threadNum,
             )
         except Exception as e:
-            logger.error("上传失败：{}".format(e))
+            logger.error(f"上传失败：{e}", stack_info=True)
 
     def restart(self):
         """
@@ -168,6 +171,14 @@ class Wukong(object):
         """
         logger.info("性能调优")
         self._profiling = True
+        self.run()
+
+    def debug(self):
+        """
+        调试模式启动服务
+        """
+        logger.info("进入调试模式")
+        self._debug = True
         self.run()
 
 

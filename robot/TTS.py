@@ -3,6 +3,13 @@ import os
 import base64
 import tempfile
 import pypinyin
+import subprocess
+import uuid
+
+import asyncio
+import edge_tts
+import nest_asyncio
+
 from aip import AipSpeech
 from . import utils, config, constants
 from robot import logging
@@ -10,12 +17,12 @@ from pathlib import Path
 from pypinyin import lazy_pinyin
 from pydub import AudioSegment
 from abc import ABCMeta, abstractmethod
-from .sdk import TencentSpeech, AliSpeech, XunfeiSpeech, atc
+from .sdk import TencentSpeech, AliSpeech, XunfeiSpeech, atc, VITSClient, VolcengineSpeech
 import requests
 from xml.etree import ElementTree
 
 logger = logging.getLogger(__name__)
-
+nest_asyncio.apply()
 
 class AbstractTTS(object):
     """
@@ -104,12 +111,11 @@ class HanTTS(AbstractTTS):
 
         if not os.path.exists(src):
             logger.error(
-                "{} 合成失败: 请先下载 syllables.zip (https://sourceforge.net/projects/hantts/files/?source=navbar) 并解压到 ~/.wukong 目录下".format(
-                    self.SLUG
-                )
+                f"{self.SLUG} 合成失败: 请先下载 syllables.zip (https://sourceforge.net/projects/hantts/files/?source=navbar) 并解压到 ~/.wukong 目录下",
+                stack_info=True,
             )
             return None
-        logger.debug("{} 合成中...".format(self.SLUG))
+        logger.debug(f"{self.SLUG} 合成中...")
         delay = 0
         increment = 355  # milliseconds
         pause = 500  # pause for punctuation
@@ -138,7 +144,7 @@ class HanTTS(AbstractTTS):
         with tempfile.NamedTemporaryFile() as f:
             tmpfile = f.name
         result.export(tmpfile, format="wav")
-        logger.info("{} 语音合成成功，合成路径：{}".format(self.SLUG, tmpfile))
+        logger.info(f"{self.SLUG} 语音合成成功，合成路径：{tmpfile}")
         return tmpfile
 
 
@@ -187,10 +193,10 @@ class AzureTTS(AbstractTTS):
         # 识别正确返回语音二进制,http状态码为200
         if result.status_code == 200:
             tmpfile = utils.write_temp_file(result.content, ".mp3")
-            logger.info("{} 语音合成成功，合成路径：{}".format(self.SLUG, tmpfile))
+            logger.info(f"{self.SLUG} 语音合成成功，合成路径：{tmpfile}")
             return tmpfile
         else:
-            logger.critical("{} 合成失败！".format(self.SLUG), exc_info=True)
+            logger.critical(f"{self.SLUG} 合成失败！", stack_info=True)
 
 
 class BaiduTTS(AbstractTTS):
@@ -227,10 +233,10 @@ class BaiduTTS(AbstractTTS):
         # 识别正确返回语音二进制 错误则返回dict 参照下面错误码
         if not isinstance(result, dict):
             tmpfile = utils.write_temp_file(result, ".mp3")
-            logger.info("{} 语音合成成功，合成路径：{}".format(self.SLUG, tmpfile))
+            logger.info(f"{self.SLUG} 语音合成成功，合成路径：{tmpfile}")
             return tmpfile
         else:
-            logger.critical("{} 合成失败！".format(self.SLUG), exc_info=True)
+            logger.critical(f"{self.SLUG} 合成失败！", stack_info=True)
 
 
 class TencentTTS(AbstractTTS):
@@ -257,7 +263,7 @@ class TencentTTS(AbstractTTS):
         region="ap-guangzhou",
         voiceType=0,
         language=1,
-        **args
+        **args,
     ):
         super(self.__class__, self).__init__()
         self.engine = TencentSpeech.tencentSpeech(secret_key, secretid)
@@ -274,10 +280,10 @@ class TencentTTS(AbstractTTS):
             audio = result["Response"]["Audio"]
             data = base64.b64decode(audio)
             tmpfile = utils.write_temp_file(data, ".wav")
-            logger.info("{} 语音合成成功，合成路径：{}".format(self.SLUG, tmpfile))
+            logger.info(f"{self.SLUG} 语音合成成功，合成路径：{tmpfile}")
             return tmpfile
         else:
-            logger.critical("{} 合成失败：{}".format(self.SLUG, result), exc_info=True)
+            logger.critical(f"{self.SLUG} 合成失败：{result}", stack_info=True)
 
 
 class XunfeiTTS(AbstractTTS):
@@ -328,11 +334,112 @@ class AliTTS(AbstractTTS):
     def get_speech(self, phrase):
         tmpfile = AliSpeech.tts(self.appKey, self.token, self.voice, phrase)
         if tmpfile:
-            logger.info("{} 语音合成成功，合成路径：{}".format(self.SLUG, tmpfile))
+            logger.info(f"{self.SLUG} 语音合成成功，合成路径：{tmpfile}")
             return tmpfile
         else:
-            logger.critical("{} 合成失败！".format(self.SLUG), exc_info=True)
+            logger.critical(f"{self.SLUG} 合成失败！", stack_info=True)
 
+
+class EdgeTTS(AbstractTTS):
+    """
+    edge-tts 引擎
+    voice: 发音人，默认是 zh-CN-XiaoxiaoNeural
+        全部发音人列表：命令行执行 edge-tts --list-voices 可以打印所有语音
+    """
+
+    SLUG = "edge-tts"
+
+    def __init__(self, voice="zh-CN-XiaoxiaoNeural", **args):
+        super(self.__class__, self).__init__()
+        self.voice = voice
+
+    @classmethod
+    def get_config(cls):
+        # Try to get ali_yuyin config from config
+        return config.get("edge-tts", {})
+
+    async def async_get_speech(self, phrase):
+        try:
+            tmpfile = os.path.join(constants.TEMP_PATH, uuid.uuid4().hex + ".mp3")
+            tts = edge_tts.Communicate(text=phrase, voice=self.voice)
+            await tts.save(tmpfile)    
+            logger.info(f"{self.SLUG} 语音合成成功，合成路径：{tmpfile}")
+            return tmpfile
+        except Exception as e:
+            logger.critical(f"{self.SLUG} 合成失败：{str(e)}！", stack_info=True)
+            return None
+
+    def get_speech(self, phrase):
+        event_loop = asyncio.new_event_loop()
+        tmpfile = event_loop.run_until_complete(self.async_get_speech(phrase))
+        event_loop.close()
+        return tmpfile
+        
+            
+
+class MacTTS(AbstractTTS):
+    """
+    macOS 系统自带的TTS
+    voice: 发音人，默认是 Tingting
+        全部发音人列表：命令行执行 say -v '?' 可以打印所有语音
+        中文推荐 Tingting（普通话）或者 Sinji（粤语）
+    """
+
+    SLUG = "mac-tts"
+
+    def __init__(self, voice="Tingting", **args):
+        super(self.__class__, self).__init__()
+        self.voice = voice
+
+    @classmethod
+    def get_config(cls):
+        # Try to get ali_yuyin config from config
+        return config.get("mac-tts", {})
+
+    def get_speech(self, phrase):
+        tmpfile = os.path.join(constants.TEMP_PATH, uuid.uuid4().hex + ".asiff")
+        res = subprocess.run(
+            ["say", "-v", self.voice, "-o", tmpfile, str(phrase)],
+            shell=False,
+            universal_newlines=True,
+        )
+        if res.returncode == 0:
+            logger.info(f"{self.SLUG} 语音合成成功，合成路径：{tmpfile}")
+            return tmpfile
+        else:
+            logger.critical(f"{self.SLUG} 合成失败！", stack_info=True)
+
+class VITS(AbstractTTS):
+    """
+    VITS 语音合成
+    需要自行搭建vits-simple-api服务器：https://github.com/Artrajz/vits-simple-api
+    server_url : 服务器url，如http://127.0.0.1:23456
+    api_key : 若服务器配置了API Key，在此填入
+    speaker_id : 说话人ID，由所使用的模型决定
+    length : 调节语音长度，相当于调节语速，该数值越大语速越慢。
+    noise : 噪声
+    noisew : 噪声偏差
+    max : 分段阈值，按标点符号分段，加起来大于max时为一段文本。max<=0表示不分段。
+    timeout: 响应超时时间，根据vits-simple-api服务器性能不同配置合理的超时时间。
+    """
+
+    SLUG = "VITS"
+
+    def __init__(self, server_url, api_key, speaker_id, length, noise, noisew, max, timeout, **args):
+        super(self.__class__, self).__init__()
+        self.server_url, self.api_key, self.speaker_id, self.length, self.noise, self.noisew, self.max, self.timeout = (
+            server_url, api_key, speaker_id, length, noise, noisew, max, timeout)
+
+    @classmethod
+    def get_config(cls):
+        return config.get("VITS", {})
+
+    def get_speech(self, phrase):
+        result = VITSClient.tts(phrase, self.server_url, self.api_key, self.speaker_id, self.length, self.noise,
+                                self.noisew, self.max, self.timeout)
+        tmpfile = utils.write_temp_file(result, ".wav")
+        logger.info(f"{self.SLUG} 语音合成成功，合成路径：{tmpfile}")
+        return tmpfile
 
 def get_engine_by_slug(slug=None):
     """
@@ -354,14 +461,40 @@ def get_engine_by_slug(slug=None):
     )
 
     if len(selected_engines) == 0:
-        raise ValueError("错误：找不到名为 {} 的 TTS 引擎".format(slug))
+        raise ValueError(f"错误：找不到名为 {slug} 的 TTS 引擎")
     else:
         if len(selected_engines) > 1:
-            logger.warning("注意: 有多个 TTS 名称与指定的引擎名 {} 匹配").format(slug)
+            logger.warning(f"注意: 有多个 TTS 名称与指定的引擎名 {slug} 匹配")
         engine = selected_engines[0]
-        logger.info("使用 {} TTS 引擎".format(engine.SLUG))
+        logger.info(f"使用 {engine.SLUG} TTS 引擎")
         return engine.get_instance()
 
+class VolcengineTTS(AbstractTTS):
+    """
+    VolcengineTTS 语音合成
+    """
+
+    SLUG = "volcengine-tts"
+
+    def __init__(self, appid, token, cluster, voice_type, **args):
+        super(self.__class__, self).__init__()
+        self.engine = VolcengineSpeech.VolcengineTTS(appid=appid, token=token, cluster=cluster, voice_type=voice_type)
+
+    @classmethod
+    def get_config(cls):
+        # Try to get ali_yuyin config from config
+        return config.get("volcengine-tts", {})
+
+    def get_speech(self, text):
+        result = self.engine.execute(text)
+        if result is None:
+            logger.critical(f"{self.SLUG} 合成失败！", stack_info=True)
+        else:
+            tmpfile = os.path.join(constants.TEMP_PATH, uuid.uuid4().hex + ".mp3")
+            with open(tmpfile, "wb") as f:
+                f.write(result)
+            logger.info(f"{self.SLUG} 语音合成成功，合成路径：{tmpfile}")
+            return tmpfile
 
 def get_engines():
     def get_subclasses(cls):

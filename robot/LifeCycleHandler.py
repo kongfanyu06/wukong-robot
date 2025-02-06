@@ -1,6 +1,9 @@
-import time
 import logging
 import multiprocessing
+import os
+import time
+import pickle
+import time
 import _thread as thread
 
 from watchdog.observers import Observer
@@ -9,6 +12,8 @@ from robot.ConfigMonitor import ConfigMonitor
 from robot.sdk import LED
 
 logger = logging.getLogger(__name__)
+
+LOCAL_REMINDER = os.path.join(constants.TEMP_PATH, "reminder.pkl")
 
 
 def singleton(cls):
@@ -49,12 +54,36 @@ class LifeCycleHandler(object):
         self._observer.schedule(config_event_handler, constants.DATA_PATH, False)
         self._observer.start()
 
+        # 加载历史提醒
+        self._read_reminders()
+
         # 行空板
         self._init_unihiker()
         # LED 灯
         self._init_LED()
         # Muse 头环
         self._init_muse()
+
+    def _read_reminders(self):
+        logger.info("重新加载提醒信息")
+        if os.path.exists(LOCAL_REMINDER):
+            with open(LOCAL_REMINDER, "rb") as f:
+                jobs = pickle.load(f)
+                for job in jobs:
+                    if "repeat" in job.remind_time or int(time.time()) < int(
+                        job.job_id
+                    ):
+                        logger.info(f"加入提醒: {job.describe}, job_id: {job.job_id}")
+                        if not (self._conversation.scheduler.has_job(job.job_id)):
+                            self._conversation.scheduler.add_job(
+                                job.remind_time,
+                                job.original_time,
+                                job.content,
+                                lambda: self.alarm(
+                                    job.remind_time, job.content, job.job_id
+                                ),
+                                job_id=job.job_id,
+                            )
 
     def _init_unihiker(self):
         global unihiker
@@ -65,7 +94,7 @@ class LifeCycleHandler(object):
                 self._unihiker = Unihiker()
                 thread.start_new_thread(self._unihiker_shake_event, ())
             except ImportError:
-                logger.error("错误：请确保当前硬件环境为行空板")
+                logger.error("错误：请确保当前硬件环境为行空板", stack_info=True)
 
     def _init_LED(self):
         if config.get("/LED/enable", False) and config.get("/LED/type") == "aiy":
@@ -81,7 +110,7 @@ class LifeCycleHandler(object):
                 bci.start()
                 thread.start_new_thread(self._muse_loop_event, ())
             except ImportError:
-                logger.error("错误：请确保当前硬件搭配了Muse头环并安装了相关驱动")
+                logger.error("错误：请确保当前硬件搭配了Muse头环并安装了相关驱动", stack_info=True)
 
     def _unihiker_shake_event(self):
         """
@@ -104,7 +133,7 @@ class LifeCycleHandler(object):
         try:
             from aiy.board import Board
         except ImportError:
-            logger.error("错误：请确保当前硬件环境为Google AIY VoiceKit并正确安装了驱动")
+            logger.error("错误：请确保当前硬件环境为Google AIY VoiceKit并正确安装了驱动", stack_info=True)
             return
         with Board() as board:
             while True:
@@ -126,8 +155,8 @@ class LifeCycleHandler(object):
             self._conversation.doResponse(query)
             self._wakeup.clear()
 
-    def _beep_hi(self, onCompleted=None, wait=False):
-        Player.play(constants.getData("beep_hi.wav"), onCompleted, wait)
+    def _beep_hi(self, onCompleted=None):
+        Player.play(constants.getData("beep_hi.wav"), onCompleted)
 
     def _beep_lo(self):
         Player.play(constants.getData("beep_lo.wav"))
@@ -136,7 +165,8 @@ class LifeCycleHandler(object):
         """
         唤醒并进入录音的状态
         """
-        self._beep_hi(onCompleted=onCompleted, wait=onCompleted)
+        logger.info("onWakeup")
+        self._beep_hi(onCompleted=onCompleted)
         if config.get("/LED/enable", False):
             LED.wakeup()
         self._unihiker and self._unihiker.record(1, "我正在聆听...")
@@ -146,6 +176,7 @@ class LifeCycleHandler(object):
         """
         录音结束并进入思考的状态
         """
+        logger.info("onThink")
         self._beep_lo()
         self._unihiker and self._unihiker.think()
         self._unihiker and self._unihiker.record(1, "我正在思考...")
@@ -157,9 +188,9 @@ class LifeCycleHandler(object):
         思考完成并播放结果的状态
         """
         if t == 1:
-            text = text[:60]+'...' if len(text) >= 60 else text
+            text = text[:60] + "..." if len(text) >= 60 else text
         else:
-            text = text[:9]+'...' if len(text) >= 9 else text
+            text = text[:9] + "..." if len(text) >= 9 else text
         self._unihiker and self._unihiker.record(t, text)
         if config.get("/LED/enable", False):
             LED.off()
@@ -168,7 +199,8 @@ class LifeCycleHandler(object):
         """
         恢复沉浸式技能的状态
         """
-        pass
+        logger.info("onRestore")
 
     def onKilled(self):
+        logger.info("onKill")
         self._observer.stop()

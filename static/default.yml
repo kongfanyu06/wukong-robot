@@ -23,7 +23,7 @@ server:
 # 可选值：
 # porcupine
 # snowboy
-detector: snowboy
+detector: porcupine
 # 灵敏度
 sensitivity: 0.5
 
@@ -31,13 +31,15 @@ sensitivity: 0.5
 # 登录 https://console.picovoice.ai/
 # 可以获取 access_key 和训练自己的唤醒词
 porcupine: 
-    keyword:
+    keywords:
         - 'porcupine'
+        - 'hello bing'
     keyword_paths:
         # 支持追加多个唤醒词
         # 自定义唤醒词请放到 $HOME/.wukong 目录中
         # - 'spiderman.ppn'
-    access_key: 'xxxxxxxxxxxxxxxxxxxxxxxx'
+        - 'hello-bing_en_raspberry-pi_v3_0_0.ppn'
+    access_key: ''
 
 # snowboy 离线唤醒
 # 建议使用 snowboy-seasalt (https://github.com/rhasspy/snowboy-seasalt)
@@ -72,14 +74,15 @@ LED:
     enable: false
     type: aiy  # aiy: Google AIY Voice Kit; respeaker：respeaker 2Mics
 
-# 当机器人反问用户时，是否自动进入下一轮聆听
-active_mode: true
-
 # 勿扰模式，该时间段内自动进入睡眠，避免监听
 do_not_bother:
     enable: false # true: 开启; false: 关闭
     since: 23    # 开始时间
     till: 9      # 结束时间，如果比 since 小表示第二天
+
+# 提醒功能
+reminder:
+    repeat: 3  # 语音重复次数
 
 # 是否定期清理temp目录下的缓存音频
 lru_cache:
@@ -88,25 +91,28 @@ lru_cache:
 
 # 语音合成服务配置
 # 可选值：
-# han-tts       - HanTTS
-# baidu-tts     - 百度语音合成（推荐）
-# xunfei-tts    - 讯飞语音合成
-# ali-tts       - 阿里语音合成（推荐）
-# tencent-tts   - 腾讯云语音合成（推荐）
-# azure-tts     - 微软语音合成
-tts_engine: baidu-tts
-
-# 文本超过一定字符数后是否截断
-trim_too_long_text: true
-max_text_length: 128
+# han-tts        - HanTTS
+# baidu-tts      - 百度语音合成
+# xunfei-tts     - 讯飞语音合成
+# ali-tts        - 阿里语音合成
+# tencent-tts    - 腾讯云语音合成
+# azure-tts      - 微软语音合成
+# mac-tts        - macOS 系统自带TTS（mac 系统推荐）
+# edge-tts       - 基于 Edge 的 TTS（推荐）
+# VITS           - 基于 VITS 的AI语音合成
+# volcengine-tts - 火山引擎语音合成
+tts_engine: edge-tts
 
 # 语音识别服务配置
 # 可选值：
-# baidu-asr     - 百度在线语音识别
-# xunfei-asr    - 讯飞语音识别
-# ali-asr       - 阿里语音识别
-# tencent-asr   - 腾讯云语音识别（推荐）
-# azure-asr     - 微软语音识别
+# baidu-asr      - 百度在线语音识别
+# xunfei-asr     - 讯飞语音识别
+# ali-asr        - 阿里语音识别
+# tencent-asr    - 腾讯云语音识别（推荐）
+# azure-asr      - 微软语音识别
+# openai         - OpenAI Whisper
+# fun-asr        - 达摩院FunASR语音识别
+# volcengine-asr - 火山引擎语音识别
 asr_engine: baidu-asr
 
 # 百度语音服务
@@ -158,6 +164,29 @@ tencent_yuyin:
     voiceType: 0            # 0: 女声1；1：男生1；2：男生2
     language: 1             # 1: 中文；2：英文
 
+volcengine-asr:
+    # 在官网https://www.volcengine.com/ 语音技术申请，有免费额度
+    appid: ''
+    token: ''
+    cluster: ''
+
+
+# 达摩院FunASR实时语音转写服务软件包
+fun_asr:
+    # 导出模型流程：https://github.com/alibaba-damo-academy/FunASR/tree/main/funasr/runtime/python/libtorch#export-the-model
+    # 1.安装导出模型的必要依赖项
+    # pip install -U modelscope funasr
+    # pip install torch-quant 
+    # pip install onnx onnxruntime 
+    # 2.导出模型权重
+    # python -m funasr.export.export_model --model-name damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch --export-dir ./export --type torch --quantize True
+    # 3.需要注意
+    # 当前使用的onnxruntime的推理方案，第一次初始化需要推理框架内部会将模型参数文件转换为onnx格式文件，大约需要5分钟
+    # 从第二次载入时，识别框架初始，载入模型约需要等待20秒左右
+    inference_type: onnxruntime # FunASR支持本地onnxruntime，libtorch推理框架，以及client-server方式，当前只实现了onnxruntime方式，相对部署流程较为简单
+    model_dir: '/xxxxxxxxxxxxxxxxxxx/export/damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch' # 上述流程导出的模型的模型文件的绝对路径
+
+
 # HanTTS 服务
 han-tts:
     # 所使用的语音库目录
@@ -165,6 +194,49 @@ han-tts:
     # 也支持自行录制，详见：
     # https://github.com/junzew/HanTTS
     voice: 'syllables' 
+
+# macOS 自带的 TTS 服务
+# 注意：仅 macOS 系统可用！
+mac-tts:
+    # 命令行执行 say -v '?' 可以打印所有音色
+    # 中文推荐 Tingting（普通话）或者 Sinji（粤语）
+    voice: Tingting
+
+# 基于 edge 浏览器的在线 TTS 服务
+edge-tts:
+    # 命令行执行 edge-tts --list-voices 可以打印所有音色
+    # 中文推荐 `zh` 开头的音色
+    voice: zh-CN-XiaoxiaoNeural
+
+# 火山引擎TTS服务
+volcengine-tts:
+    # 在官网https://www.volcengine.com/ 语音技术申请，有免费额度
+    # 音色列表voice_type有几十种，链接在https://www.volcengine.com/docs/6561/97465
+    # 免费额度QPS限制2，需要设置tts_parallel=2
+    appid: ""
+    token: ""
+    cluster: ""
+    voice_type: ""
+
+# 基于 VITS 的AI语音合成
+VITS:
+    # 需要自行搭建vits-simple-api服务器：https://github.com/Artrajz/vits-simple-api
+    #    server_url: 服务器url（格式为http://{IP地址}:{端口}，不带最后的斜杠），如http://127.0.0.1:23456
+    #    api_key: 若服务器配置了API Key，在此填入
+    #    speaker_id: 说话人ID，由所使用的模型决定
+    #    length: 调节语音长度，相当于调节语速，该数值越大语速越慢。
+    #    noise: 噪声
+    #    noisew: 噪声偏差
+    #    max: 分段阈值，按标点符号分段，加起来大于max时为一段文本。max<=0表示不分段。
+    #    timeout: 响应超时时间（秒），根据vits-simple-api服务器性能不同配置合理的超时时间。
+    server_url: "http://127.0.0.1:23456"
+    api_key: "api_key"
+    speaker_id: 0
+    length: 1.0
+    noise: 0.667
+    noisew: 0.8
+    max: 50
+    timeout: 60
 
 # NLU 引擎
 # 可选值：
@@ -174,10 +246,30 @@ nlu_engine: unit
 # 聊天机器人
 # 可选值：
 # unit      - 百度UNIT（推荐）
-# openai    - OpenAI GPT3（要求 Python >= 3.7.1）
+# openai    - OpenAI ChatGPT
 # anyq      - AnyQ
 # tuling    - 图灵机器人
-robot: unit
+robot: bing
+
+
+# 必应 bing
+bing:
+    prefix: "
+      # 角色: 语音化必应智能音箱
+      ## 目标
+      - 您是一个语音化智能音箱，具备配合其他模块将你输出的文字转换为语音的能力。
+      ## 约束
+      - 您的回复必须以口语化的形式呈现，不能包含任何链接、emoji表情、图片、网站推荐以及其他形式的书面语言。
+      - 请避免涉及到代码、图片生成等专业性的工作场景内容。
+      ## 技能
+      - 百科问答技能: 您可以解答各种百科性的问题，进行科普教育。
+      - 咨询服务技能: 您可以接受各领域的咨询，为用户提供一对一的解答服务。
+      - 常见智能音箱功能: 您还能讲笑话、阅读短新闻，提供今日头条、热点等信息。
+      - 闲聊: 倾听倾诉给予建议"
+
+    proxy: "http://127.0.0.1:7890"
+    # creative, balanced, precise
+    mode: "creative"
 
 # 百度 UNIT
 unit:
@@ -206,27 +298,32 @@ anyq:
 tuling:
     tuling_key: '98f95153fb5c4684a5602b909949ba61'  # 建议使用自己的图灵机器人API Key
 
-# OpenAI(GPT3) 机器人
+# OpenAI(ChatGPT) 机器人
 # 使用科学上网工具到 https://platform.openai.com
 # 注册一个账号，获得 openai_api_key 后填到下面的配置中即可
-# 缺点：返回速度较慢，并要求 Python >= 3.7.1
 openai:
     openai_api_key: 'sk-xxxxxxxxxxxxxxxxxxxxxxxxxx'
-    model: 'text-davinci-003'
-    #参数指定将生成文本的模型类型。默认情况下，OpenAI 提供了几个模型供您选择，您可以在此处查看。此外，您甚至可以创建自己的模型，但这超出了本教程的范围。https://beta.openai.com/docs/models/overview
-    #prompt:''
-    #该prompt参数指定您从模型提供的输入提示，然后模型将自动完成对它的响应。这可以是任何你想要的
+    provider: 'azure' # openai的接口填写openai, azure的填写azure
+    api_version: '2023-05-15' # 如果是openai的，留空就行，azure的需填写对应的api_version，参考官方文档
+    # 参数指定将生成文本的模型类型。目前支持 gpt-3.5-turbo 和 gpt-3.5-turbo-0301 两种选择
+    model: 'gpt-3.5-turbo'
+    # 在前面加的一段前缀
+    prefix: '请用200字回答：'
+    # 该temperature参数可以设置返回内容地多样性。值越大意味着该模型更有可能产生创造性的东西，设置为 1 意味着模型将返回它不确定的结果；相比之下，将此参数设置为 0 意味着模型将返回它几乎可以肯定的结果。
     temperature: 1
-    #该temperature参数指定响应的不确定性。这意味着该模型更有可能产生创造性的东西，并且可以被认为是模型承担风险并偏离正常反应。将此参数设置为 1 意味着模型将返回它不确定的结果，相比之下，将此参数设置为 0 意味着模型将返回它几乎可以肯定的结果。
+    # 该max_tokens参数指定模型允许生成的最大字符数量作为其输出的一部分。您需要为生成的更多字符付费，因此请务必小心使用此参数。
     max_tokens: 2000
-    #该max_tokens参数指定模型允许生成的最大令牌数量作为其输出的一部分。您需要为生成的更多令牌付费，因此请务必小心使用此参数。
+    # 一个可用于代替 temperature 的参数，对应机器学习中 nucleus sampling，如果设置 0.1 意味着只考虑构成前 10% 概率质量的 tokens
     top_p: 1.0
-    #一个可用于代替 temperature 的参数，对应机器学习中 nucleus sampling，如果设置 0.1 意味着只考虑构成前 10% 概率质量的 tokens
+    # -2.0 ~ 2.0 之间的数字，正值会根据新 tokens 在文本中的现有频率对其进行惩罚，从而降低模型逐字重复同一行的可能性
     frequency_penalty: 0.0
-    #-2.0 ~ 2.0 之间的数字，正值会根据新 tokens 在文本中的现有频率对其进行惩罚，从而降低模型逐字重复同一行的可能性
+    # -2.0 ~ 2.0 之间的数字，正值会根据到目前为止是否出现在文本中来惩罚新 tokens，从而增加模型谈论新主题的可能性
     presence_penalty: 0.0
-    #-2.0 ~ 2.0 之间的数字，正值会根据到目前为止是否出现在文本中来惩罚新 tokens，从而增加模型谈论新主题的可能性
     stop_ai: 'stop'
+    # 如果需要代理，反注释下面的配置进行修改
+    # proxy: '127.0.0.1:1080'
+    # 如果需要更换 api_base ，反注释下面的配置进行修改
+    # api_base: "https://api.openai.com/v1/chat"
 
 
 # 邮箱
@@ -260,6 +357,10 @@ LocalPlayer:
     path: "/Users/panweizhou/Music"  # 本地音乐存放路径
 
 
+## 极客模式
+geek:
+    max_silent_count: 20  # 当不说话的次数达到多少次后，主动退出极客模式
+
 statistic: true # 是否开启上报
 
 #######################
@@ -280,4 +381,4 @@ weather:
     enable: false
     key: '心知天气 API Key'
 
-
+tts_parallel: 5

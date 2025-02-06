@@ -1,13 +1,17 @@
 # -*- coding: utf-8 -*-
+import asyncio
 import subprocess
 import os
 import platform
+import queue
 import signal
-from . import utils
-import _thread as thread
+import threading
+
 from robot import logging
 from ctypes import CFUNCTYPE, c_char_p, c_int, cdll
 from contextlib import contextmanager
+
+from . import utils
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +37,9 @@ def no_alsa_error():
         pass
 
 
-def play(fname, onCompleted=None, wait=False):
+def play(fname, onCompleted=None):
     player = getPlayerByFileName(fname)
-    player.play(fname, onCompleted=onCompleted, wait=wait)
+    player.play(fname, onCompleted=onCompleted)
 
 
 def getPlayerByFileName(fname):
@@ -60,6 +64,9 @@ class AbstractPlayer(object):
     def is_playing(self):
         return False
 
+    def join(self):
+        pass
+
 
 class SoxPlayer(AbstractPlayer):
     SLUG = "SoxPlayer"
@@ -70,9 +77,42 @@ class SoxPlayer(AbstractPlayer):
         self.proc = None
         self.delete = False
         self.onCompleteds = []
+        # 创建一个锁用于保证同一时间只有一个音频在播放
+        self.play_lock = threading.Lock()
+        self.play_queue = queue.Queue()  # 播放队列
+        self.consumer_thread = threading.Thread(target=self.playLoop)
+        self.consumer_thread.start()
+        self.loop = asyncio.new_event_loop()  # 创建事件循环
+        self.thread_loop = threading.Thread(target=self.loop.run_forever)
+        self.thread_loop.start()
 
-    def doPlay(self):
-        cmd = ["play", str(self.src)]
+    def executeOnCompleted(self, res, onCompleted):
+        # 全部播放完成，播放统一的 onCompleted()
+        res and onCompleted and onCompleted()
+        if self.play_queue.empty():
+            for onCompleted in self.onCompleteds:
+                onCompleted and onCompleted()
+
+    def playLoop(self):
+        while True:
+            (src, onCompleted) = self.play_queue.get()
+            if src:
+                with self.play_lock:
+                    logger.info(f"开始播放音频：{src}")
+                    self.src = src
+                    res = self.doPlay(src)
+                    self.play_queue.task_done()
+                    # 将 onCompleted() 方法的调用放到事件循环的线程中执行
+                    self.loop.call_soon_threadsafe(
+                        self.executeOnCompleted, res, onCompleted
+                    )
+
+    def doPlay(self, src):
+        system = platform.system()
+        if system == "Darwin":
+            cmd = ["afplay", str(src)]
+        else:
+            cmd = ["play", str(src)]
         logger.debug("Executing %s", " ".join(cmd))
         self.proc = subprocess.Popen(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
@@ -81,23 +121,16 @@ class SoxPlayer(AbstractPlayer):
         self.proc.wait()
         self.playing = False
         if self.delete:
-            utils.check_and_delete(self.src)
-        logger.debug("play completed")
-        if self.proc and self.proc.returncode == 0:
-            for onCompleted in self.onCompleteds:
-                onCompleted and onCompleted()
+            utils.check_and_delete(src)
+        logger.info(f"播放完成：{src}")
+        return self.proc and self.proc.returncode == 0
 
-    def play(self, src, delete=False, onCompleted=None, wait=False):
+    def play(self, src, delete=False, onCompleted=None):
         if src and (os.path.exists(src) or src.startswith("http")):
-            self.src = src
             self.delete = delete
-            onCompleted and self.onCompleteds.append(onCompleted)
-            if not wait:
-                thread.start_new_thread(self.doPlay, ())
-            else:
-                self.doPlay()
+            self.play_queue.put((src, onCompleted))
         else:
-            logger.critical("path not exists: {}".format(src))
+            logger.critical(f"path not exists: {src}", stack_info=True)
 
     def preappendCompleted(self, onCompleted):
         onCompleted and self.onCompleteds.insert(0, onCompleted)
@@ -114,11 +147,20 @@ class SoxPlayer(AbstractPlayer):
             self.proc.terminate()
             self.proc.kill()
             self.proc = None
+            self.playing = False
+            self._clear_queue()
             if self.delete:
                 utils.check_and_delete(self.src)
 
     def is_playing(self):
-        return self.playing
+        return self.playing or not self.play_queue.empty()
+
+    def join(self):
+        self.play_queue.join()
+
+    def _clear_queue(self):
+        with self.play_queue.mutex:
+            self.play_queue.queue.clear()
 
 
 class MusicPlayer(SoxPlayer):
@@ -169,7 +211,7 @@ class MusicPlayer(SoxPlayer):
 
     def stop(self):
         if self.proc:
-            logger.debug("MusicPlayer stop {}".format(self.proc.pid))
+            logger.debug(f"MusicPlayer stop {self.proc.pid}")
             self.onCompleteds = []
             os.kill(self.proc.pid, signal.SIGSTOP)
             self.proc.terminate()
@@ -202,10 +244,8 @@ class MusicPlayer(SoxPlayer):
             volume += 20
             if volume >= 100:
                 volume = 100
-                self.plugin.say("音量已经最大啦", wait=True)
-            subprocess.run(
-                ["osascript", "-e", "set volume output volume {}".format(volume)]
-            )
+                self.plugin.say("音量已经最大啦")
+            subprocess.run(["osascript", "-e", f"set volume output volume {volume}"])
         elif system == "Linux":
             res = subprocess.run(
                 ["amixer sget Master | grep 'Mono:' | awk -F'[][]' '{ print $2 }'"],
@@ -218,12 +258,12 @@ class MusicPlayer(SoxPlayer):
                 volume += 20
                 if volume >= 100:
                     volume = 100
-                    self.plugin.say("音量已经最大啦", wait=True)
-                subprocess.run(["amixer", "set", "Master", "{}%".format(volume)])
+                    self.plugin.say("音量已经最大啦")
+                subprocess.run(["amixer", "set", "Master", f"{volume}%"])
             else:
                 subprocess.run(["amixer", "set", "Master", "20%+"])
         else:
-            self.plugin.say("当前系统不支持调节音量", wait=True)
+            self.plugin.say("当前系统不支持调节音量")
         self.resume()
 
     def turnDown(self):
@@ -239,10 +279,8 @@ class MusicPlayer(SoxPlayer):
             volume -= 20
             if volume <= 20:
                 volume = 20
-                self.plugin.say("音量已经很小啦", wait=True)
-            subprocess.run(
-                ["osascript", "-e", "set volume output volume {}".format(volume)]
-            )
+                self.plugin.say("音量已经很小啦")
+            subprocess.run(["osascript", "-e", f"set volume output volume {volume}"])
         elif system == "Linux":
             res = subprocess.run(
                 ["amixer sget Master | grep 'Mono:' | awk -F'[][]' '{ print $2 }'"],
@@ -255,10 +293,10 @@ class MusicPlayer(SoxPlayer):
                 volume -= 20
                 if volume <= 20:
                     volume = 20
-                    self.plugin.say("音量已经最小啦", wait=True)
-                subprocess.run(["amixer", "set", "Master", "{}%".format(volume)])
+                    self.plugin.say("音量已经最小啦")
+                subprocess.run(["amixer", "set", "Master", f"{volume}%"])
             else:
                 subprocess.run(["amixer", "set", "Master", "20%-"])
         else:
-            self.plugin.say("当前系统不支持调节音量", wait=True)
+            self.plugin.say("当前系统不支持调节音量")
         self.resume()

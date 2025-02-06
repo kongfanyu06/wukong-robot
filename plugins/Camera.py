@@ -18,7 +18,7 @@ class Plugin(AbstractPlugin):
         count_down = config.get("/camera/count_down", 3)
         dest_path = config.get("/camera/dest_path", os.path.expanduser("~/pictures"))
         device = config.get("/camera/device", "/dev/video0")
-        vertical_flip = config.get("/camera/verical_flip", False)
+        vertical_flip = config.get("/camera/vetical_flip", False)
         horizontal_flip = config.get("/camera/horizontal_flip", False)
         sound = config.get("/camera/sound", True)
         camera_type = config.get("/camera/type", 0)
@@ -75,9 +75,11 @@ class Plugin(AbstractPlugin):
                 self.say("拍照成功", cache=True)
                 self.say(photo_url)
         except subprocess.CalledProcessError as e:
-            logger.error(e)
+            logger.error(e, stack_info=True)
             if sound:
                 self.say("拍照失败，请检查相机是否连接正确", cache=True)
 
     def isValid(self, text, parsed):
-        return any(word in text for word in ["拍照", "拍张照"])
+        return any(word in text for word in ["拍照", "拍张照"]) and not any(
+            word in text for word in ["拍照成功", "拍照失败", "后启动拍照"]
+        )
